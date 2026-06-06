@@ -37,7 +37,7 @@ spec:
               memory: 256Mi
           readinessProbe:
             httpGet:
-              path: /v1/status
+              path: /
               port: 1111
             initialDelaySeconds: 15
             periodSeconds: 10

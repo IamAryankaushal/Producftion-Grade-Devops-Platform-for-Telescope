@@ -37,7 +37,7 @@ spec:
               memory: 512Mi
           readinessProbe:
             httpGet:
-              path: /v1/search
+              path: /
               port: 4445
             initialDelaySeconds: 15
             periodSeconds: 10

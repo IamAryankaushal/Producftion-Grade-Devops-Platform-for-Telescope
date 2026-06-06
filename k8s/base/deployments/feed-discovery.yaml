@@ -37,7 +37,7 @@ spec:
               memory: 256Mi
           readinessProbe:
             httpGet:
-              path: /v1/feed-discovery
+              path: /
               port: 9999
             initialDelaySeconds: 15
             periodSeconds: 10

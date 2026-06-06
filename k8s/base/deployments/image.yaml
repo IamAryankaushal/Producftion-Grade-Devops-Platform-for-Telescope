@@ -37,7 +37,7 @@ spec:
               memory: 256Mi
           readinessProbe:
             httpGet:
-              path: /v1/image
+              path: /
               port: 4444
             initialDelaySeconds: 15
             periodSeconds: 10

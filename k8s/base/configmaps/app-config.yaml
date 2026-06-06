@@ -35,7 +35,8 @@ data:
   MOCK_REDIS: ""
 
   # Elasticsearch
-  ELASTIC_URL: "http://telescope-elasticsearch:9200"
+  ELASTIC_URL: "http://telescope-elasticsearch"
+  ELASTIC_PORT: "9200"
   ELASTIC_PORT: "9200"
   ELASTIC_MAX_RESULTS_PER_PAGE: "5"
   ELASTIC_DELAY_MS: "10000"
