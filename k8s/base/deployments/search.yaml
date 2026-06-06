@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telescope-search
+  namespace: telescope
+  labels:
+    app: telescope-search
+    tier: microservice
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: telescope-search
+  template:
+    metadata:
+      labels:
+        app: telescope-search
+        tier: microservice
+    spec:
+      containers:
+        - name: search
+          image: telescope/search:local
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 4445
+          envFrom:
+            - configMapRef:
+                name: telescope-config
+            - secretRef:
+                name: telescope-secrets
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /v1/search
+              port: 4445
+            initialDelaySeconds: 15
+            periodSeconds: 10

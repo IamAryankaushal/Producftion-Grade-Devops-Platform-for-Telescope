@@ -1,0 +1,57 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: telescope-ingress
+  namespace: telescope
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - path: /v1/posts(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: telescope-posts
+                port:
+                  number: 5555
+          - path: /v1/search(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: telescope-search
+                port:
+                  number: 4445
+          - path: /v1/image(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: telescope-image
+                port:
+                  number: 4444
+          - path: /v1/status(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: telescope-status
+                port:
+                  number: 1111
+          - path: /v1/feed-discovery(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: telescope-feed-discovery
+                port:
+                  number: 9999
+          - path: /v1/auth(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: telescope-sso
+                port:
+                  number: 7777

@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telescope-sso
+  namespace: telescope
+  labels:
+    app: telescope-sso
+    tier: microservice
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: telescope-sso
+  template:
+    metadata:
+      labels:
+        app: telescope-sso
+        tier: microservice
+    spec:
+      containers:
+        - name: sso
+          image: telescope/sso:local
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 7777
+          envFrom:
+            - configMapRef:
+                name: telescope-config
+            - secretRef:
+                name: telescope-secrets
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /v1/auth
+              port: 7777
+            initialDelaySeconds: 15
+            periodSeconds: 10

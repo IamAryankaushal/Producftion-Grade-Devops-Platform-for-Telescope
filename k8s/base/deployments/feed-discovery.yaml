@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telescope-feed-discovery
+  namespace: telescope
+  labels:
+    app: telescope-feed-discovery
+    tier: microservice
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: telescope-feed-discovery
+  template:
+    metadata:
+      labels:
+        app: telescope-feed-discovery
+        tier: microservice
+    spec:
+      containers:
+        - name: feed-discovery
+          image: telescope/feed-discovery:local
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 9999
+          envFrom:
+            - configMapRef:
+                name: telescope-config
+            - secretRef:
+                name: telescope-secrets
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /v1/feed-discovery
+              port: 9999
+            initialDelaySeconds: 15
+            periodSeconds: 10

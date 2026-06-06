@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telescope-login
+  namespace: telescope
+  labels:
+    app: telescope-login
+    tier: infrastructure
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: telescope-login
+  template:
+    metadata:
+      labels:
+        app: telescope-login
+        tier: infrastructure
+    spec:
+      containers:
+        - name: login
+          image: kristophjunge/test-saml-idp
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: SIMPLESAMLPHP_SP_ENTITY_ID
+              value: "http://localhost/v1/auth/sp"
+            - name: SIMPLESAMLPHP_SP_ASSERTION_CONSUMER_SERVICE
+              value: "http://localhost/v1/auth/login/callback"
+            - name: SIMPLESAMLPHP_SP_SINGLE_LOGOUT_SERVICE
+              value: "http://localhost/v1/auth/logout/callback"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi

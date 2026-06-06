@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telescope-posts
+  namespace: telescope
+  labels:
+    app: telescope-posts
+    tier: microservice
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: telescope-posts
+  template:
+    metadata:
+      labels:
+        app: telescope-posts
+        tier: microservice
+    spec:
+      containers:
+        - name: posts
+          image: telescope/posts:local
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 5555
+          envFrom:
+            - configMapRef:
+                name: telescope-config
+            - secretRef:
+                name: telescope-secrets
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /v1/posts
+              port: 5555
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 5
+          livenessProbe:
+            httpGet:
+              path: /v1/posts
+              port: 5555
+            initialDelaySeconds: 30
+            periodSeconds: 20

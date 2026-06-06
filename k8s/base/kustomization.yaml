@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - configmaps/app-config.yaml
+  - secrets/app-secrets.yaml
+  - deployments/redis.yaml
+  - deployments/elasticsearch.yaml
+  - deployments/posts.yaml
+  - deployments/search.yaml
+  - deployments/image.yaml
+  - deployments/status.yaml
+  - deployments/feed-discovery.yaml
+  - deployments/sso.yaml
+  - deployments/login.yaml
+  - deployments/hpa.yaml
+  - services/all-services.yaml
+  - ingress/telescope-ingress.yaml
