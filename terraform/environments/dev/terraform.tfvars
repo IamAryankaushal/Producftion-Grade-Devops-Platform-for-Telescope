@@ -1,0 +1,4 @@
+project_name = "telescope"
+environment  = "dev"
+aws_region   = "ap-south-1"
+alert_email  = "aryankaush007@gmail.com"

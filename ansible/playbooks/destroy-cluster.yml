@@ -1,0 +1,70 @@
+---
+- name: Destroy all AWS infrastructure
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    tf_dir: "{{ playbook_dir }}/../../terraform/environments/dev"
+    aws_region: "ap-south-1"
+
+  tasks:
+    - name: Confirm destruction
+      pause:
+        prompt: |
+          ⚠️  WARNING: This will destroy ALL AWS resources and stop all billing.
+          EKS, VPC, ECR, IAM, NAT Gateway — everything provisioned by Terraform.
+          The S3 state bucket and DynamoDB lock table will be preserved.
+
+          Type 'destroy' to confirm
+      register: confirm
+
+    - name: Remove Kubernetes resources first (cleans up ALB/ELB)
+      shell: |
+        aws eks update-kubeconfig \
+          --name telescope-dev-eks \
+          --region {{ aws_region }} 2>/dev/null || true
+        kubectl delete ingress telescope-ingress \
+          -n telescope 2>/dev/null || true
+        kubectl delete svc grafana \
+          -n monitoring 2>/dev/null || true
+        echo "Waiting 30s for load balancers to be removed..."
+        sleep 30
+      when: confirm.user_input == 'destroy'
+      ignore_errors: true
+      changed_when: true
+
+    - name: Run terraform destroy
+      shell: cd {{ tf_dir }} && terraform destroy -auto-approve
+      when: confirm.user_input == 'destroy'
+      changed_when: true
+
+    - name: Verify no billable resources remain
+      shell: |
+        echo "=== EKS Clusters ==="
+        aws eks list-clusters --region {{ aws_region }} --output text
+
+        echo "=== NAT Gateways ==="
+        aws ec2 describe-nat-gateways \
+          --filter Name=state,Values=available \
+          --region {{ aws_region }} \
+          --query 'NatGateways[].NatGatewayId' \
+          --output text
+
+        echo "=== Load Balancers ==="
+        aws elbv2 describe-load-balancers \
+          --region {{ aws_region }} \
+          --query 'LoadBalancers[].LoadBalancerArn' \
+          --output text
+      when: confirm.user_input == 'destroy'
+      register: remaining
+      changed_when: false
+
+    - name: Print remaining resources check
+      debug:
+        var: remaining.stdout_lines
+      when: confirm.user_input == 'destroy'
+
+    - name: Cancelled
+      debug:
+        msg: "Destruction cancelled. No resources were changed."
+      when: confirm.user_input != 'destroy'

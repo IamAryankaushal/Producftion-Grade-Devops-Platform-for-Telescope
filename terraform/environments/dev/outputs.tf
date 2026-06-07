@@ -1,0 +1,9 @@
+output "eks_cluster_name"        { value = module.eks.cluster_name }
+output "eks_cluster_endpoint"    { value = module.eks.cluster_endpoint }
+output "ecr_registry_url"        { value = module.ecr.registry_url }
+output "ecr_repository_urls"     { value = module.ecr.repository_urls }
+output "vpc_id"                  { value = module.vpc.vpc_id }
+output "account_id"              { value = data.aws_caller_identity.current.account_id }
+output "alb_controller_role_arn" { value = module.iam.alb_controller_role_arn }
+output "oidc_provider"           { value = module.eks.oidc_provider }
+output "billing_sns_topic_arn"   { value = module.iam.billing_sns_topic_arn }
