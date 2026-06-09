@@ -3,10 +3,6 @@
   hosts: localhost
   connection: local
   gather_facts: false
-  vars:
-    tf_dir: "{{ playbook_dir }}/../../terraform/environments/dev"
-    k8s_dir: "{{ playbook_dir }}/../../k8s"
-    aws_region: "ap-south-1"
 
   tasks:
     - name: Read Terraform outputs
@@ -17,51 +13,34 @@
     - name: Parse Terraform outputs
       set_fact:
         tf: "{{ tf_outputs_raw.stdout | from_json }}"
+        ecr_registry_url: "{{ (tf_outputs_raw.stdout | from_json).ecr_registry_url.value }}"
 
-    - name: Show key outputs
-      debug:
-        msg:
-          - "Cluster: {{ tf.eks_cluster_name.value }}"
-          - "ECR registry: {{ tf.ecr_registry_url.value }}"
-          - "ALB controller role: {{ tf.alb_controller_role_arn.value }}"
-
-    - name: Configure kubectl for EKS cluster
+    - name: Configure kubectl for EKS
       shell: |
         aws eks update-kubeconfig \
           --name {{ tf.eks_cluster_name.value }} \
           --region {{ aws_region }}
       changed_when: true
 
-    - name: Create telescope namespace
+    - name: Create namespaces
       shell: |
-        kubectl create namespace telescope \
+        kubectl create namespace {{ item }} \
           --dry-run=client -o yaml | kubectl apply -f -
+      with_items:
+        - "{{ telescope_namespace }}"
+        - "{{ monitoring_namespace }}"
       changed_when: true
 
-    - name: Create monitoring namespace
-      shell: |
-        kubectl create namespace monitoring \
-          --dry-run=client -o yaml | kubectl apply -f -
-      changed_when: true
-
-    - name: Patch CoreDNS to remove Fargate annotation
+    - name: Patch and restart CoreDNS for Fargate
       shell: |
         kubectl patch deployment coredns \
           -n kube-system \
           --type json \
-          -p='[{"op":"remove","path":"/spec/template/metadata/annotations/eks.amazonaws.com~1compute-type"}]'
-      ignore_errors: true
+          -p='[{"op":"remove","path":"/spec/template/metadata/annotations/eks.amazonaws.com~1compute-type"}]' \
+          2>/dev/null || true
+        kubectl rollout restart deployment coredns -n kube-system
+        kubectl rollout status deployment coredns -n kube-system --timeout=180s
       changed_when: true
-
-    - name: Restart CoreDNS
-      shell: kubectl rollout restart deployment coredns -n kube-system
-      changed_when: true
-
-    - name: Wait for CoreDNS rollout
-      shell: |
-        kubectl rollout status deployment coredns \
-          -n kube-system --timeout=180s
-      changed_when: false
 
     - name: Add Helm repositories
       shell: |
@@ -86,73 +65,56 @@
           --wait --timeout=5m
       changed_when: true
 
-    - name: Install Prometheus
-      shell: |
-        helm upgrade --install prometheus \
-          prometheus-community/prometheus \
-          --namespace monitoring \
-          --set server.persistentVolume.enabled=false \
-          --set alertmanager.enabled=false \
-          --set pushgateway.enabled=false \
-          --wait --timeout=5m
-      changed_when: true
+# ── Monitoring role ───────────────────────────────────────────────────────────
+- name: Deploy monitoring stack
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - monitoring
 
-    - name: Install Grafana
-      shell: |
-        helm upgrade --install grafana grafana/grafana \
-          --namespace monitoring \
-          --set adminPassword=telescope123 \
-          --set persistence.enabled=false \
-          --set service.type=LoadBalancer \
-          --wait --timeout=5m
-      changed_when: true
+# ── Docker role — build and push images ──────────────────────────────────────
+- name: Build and push service images to ECR
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    build_images: true
+    push_images: true
+  tasks:
+    - name: Read ECR registry URL from Terraform
+      shell: "cd {{ tf_dir }} && terraform output -raw ecr_registry_url"
+      register: ecr_url
+      changed_when: false
 
-    - name: Login to ECR
-      shell: |
-        aws ecr get-login-password --region {{ aws_region }} \
-          | docker login \
-          --username AWS \
-          --password-stdin {{ tf.ecr_registry_url.value }}
-      changed_when: true
+    - name: Set ECR registry fact
+      set_fact:
+        ecr_registry_url: "{{ ecr_url.stdout }}"
 
-    - name: Build and push all service images to ECR
-      shell: |
-        TELESCOPE_DIR="{{ playbook_dir }}/../../telescope"
-        REGISTRY="{{ tf.ecr_registry_url.value }}"
-        DEVOPS_DIR="{{ playbook_dir }}/../.."
-        SERVICES=(posts search status feed-discovery sso parser)
+  roles:
+    - docker
 
-        for svc in "${SERVICES[@]}"; do
-          SVC_DIR="$TELESCOPE_DIR/src/api/$svc"
-          if [ -f "$SVC_DIR/Dockerfile" ]; then
-            echo "Building $svc..."
-            docker build \
-              -t "$REGISTRY/telescope/$svc:latest" \
-              -f "$SVC_DIR/Dockerfile" \
-              "$SVC_DIR/"
-            docker push "$REGISTRY/telescope/$svc:latest"
-            echo "[✓] $svc pushed"
-          fi
-        done
+# ── Deploy Kubernetes manifests ───────────────────────────────────────────────
+- name: Deploy Telescope to EKS
+  hosts: localhost
+  connection: local
+  gather_facts: false
 
-        # image service uses custom Dockerfile for sharp/musl fix
-        echo "Building image service (custom Dockerfile)..."
-        docker build \
-          -t "$REGISTRY/telescope/image:latest" \
-          -f "$DEVOPS_DIR/docker/image.Dockerfile" \
-          "$TELESCOPE_DIR/src/api/image/"
-        docker push "$REGISTRY/telescope/image:latest"
-        echo "[✓] image pushed"
-      changed_when: true
-      args:
-        executable: /bin/bash
+  tasks:
+    - name: Read Terraform outputs
+      shell: "cd {{ tf_dir }} && terraform output -json"
+      register: tf_raw
+      changed_when: false
 
-    - name: Update production kustomize overlay with ECR URLs
+    - name: Parse outputs
+      set_fact:
+        tf: "{{ tf_raw.stdout | from_json }}"
+
+    - name: Update kustomize production overlay with ECR image URLs
       shell: |
         REGISTRY="{{ tf.ecr_registry_url.value }}"
         cd {{ k8s_dir }}/overlays/production
-        SERVICES=(posts search image status feed-discovery sso parser)
-        for svc in "${SERVICES[@]}"; do
+        for svc in posts search image status feed-discovery sso parser; do
           kustomize edit set image \
             telescope/$svc=$REGISTRY/telescope/$svc:latest
         done
@@ -160,56 +122,55 @@
       args:
         executable: /bin/bash
 
-    - name: Apply Telescope Kubernetes manifests
+    - name: Update ConfigMap with RDS endpoint
+      shell: |
+        kubectl patch configmap telescope-config \
+          -n {{ telescope_namespace }} \
+          --type merge \
+          -p '{"data":{
+            "DATABASE_URL":"postgresql://telescope_admin:{{ lookup(\"env\", \"TF_VAR_db_password\") }}@{{ tf.rds_host.value }}:{{ tf.rds_port.value }}/{{ tf.rds_db_name.value }}"
+          }}'
+      changed_when: true
+      ignore_errors: true
+
+    - name: Apply Telescope manifests
       shell: kubectl apply -k {{ k8s_dir }}/overlays/production/
       changed_when: true
 
-    - name: Wait for telescope deployments
+    - name: Wait for telescope pods
       shell: |
         kubectl wait --for=condition=available \
           deployment --all \
-          -n telescope \
+          -n {{ telescope_namespace }} \
           --timeout=300s
       ignore_errors: true
       changed_when: false
 
-    - name: Get ALB ingress hostname
+    - name: Wait for ALB to be assigned
       shell: |
         for i in $(seq 1 20); do
           HOST=$(kubectl get ingress telescope-ingress \
-            -n telescope \
+            -n {{ telescope_namespace }} \
             -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' \
             2>/dev/null || echo "")
-          if [ -n "$HOST" ]; then
-            echo "$HOST"
-            exit 0
-          fi
+          [ -n "$HOST" ] && echo "$HOST" && exit 0
           echo "Waiting for ALB... ($i/20)" >&2
           sleep 15
         done
-        echo "ALB not ready yet — check: kubectl get ingress -n telescope"
+        echo "not-ready-yet"
       register: alb_hostname
       changed_when: false
 
-    - name: Get Grafana hostname
-      shell: |
-        kubectl get svc grafana -n monitoring \
-          -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' \
-          2>/dev/null || echo "not ready yet"
-      register: grafana_hostname
-      changed_when: false
-
-    - name: Print final access information
+    - name: Print final summary
       debug:
         msg:
           - "========================================================"
           - "  Telescope is live on AWS EKS (ap-south-1)"
           - "========================================================"
-          - "  Posts API:  http://{{ alb_hostname.stdout }}/v1/posts"
-          - "  Status API: http://{{ alb_hostname.stdout }}/v1/status"
-          - "  Search API: http://{{ alb_hostname.stdout }}/v1/search"
-          - "  Grafana:    http://{{ grafana_hostname.stdout }}"
-          - "              admin / telescope123"
+          - "  Posts:   http://{{ alb_hostname.stdout }}/v1/posts"
+          - "  Search:  http://{{ alb_hostname.stdout }}/v1/search"
+          - "  Status:  http://{{ alb_hostname.stdout }}/v1/status"
+          - "  RDS:     {{ tf.rds_host.value }}:{{ tf.rds_port.value }}"
           - "========================================================"
-          - "  Run ./scripts/aws-teardown.sh when done to stop billing"
+          - "  Run ./scripts/aws-teardown.sh when done"
           - "========================================================"

@@ -31,7 +31,6 @@ provider "aws" {
   }
 }
 
-# Billing alarms must be in us-east-1
 provider "aws" {
   alias  = "us_east_1"
   region = "us-east-1"
@@ -52,17 +51,12 @@ module "vpc" {
   environment  = var.environment
 }
 
-module "eks" {
-  source                         = "../../modules/eks"
-  project_name                   = var.project_name
-  environment                    = var.environment
-  eks_cluster_role_arn           = module.iam.eks_cluster_role_arn
-  fargate_pod_execution_role_arn = module.iam.fargate_pod_execution_role_arn
-  vpc_id                         = module.vpc.vpc_id
-  public_subnet_ids              = module.vpc.public_subnet_ids
-  private_subnet_ids             = module.vpc.private_subnet_ids
-
-  depends_on = [module.iam]
+module "security_groups" {
+  source       = "../../modules/security-groups"
+  project_name = var.project_name
+  environment  = var.environment
+  vpc_id       = module.vpc.vpc_id
+  vpc_cidr     = module.vpc.vpc_cidr
 }
 
 module "iam" {
@@ -79,16 +73,38 @@ module "iam" {
   }
 }
 
+module "eks" {
+  source                         = "../../modules/eks"
+  project_name                   = var.project_name
+  environment                    = var.environment
+  eks_cluster_role_arn           = module.iam.eks_cluster_role_arn
+  fargate_pod_execution_role_arn = module.iam.fargate_pod_execution_role_arn
+  vpc_id                         = module.vpc.vpc_id
+  public_subnet_ids              = module.vpc.public_subnet_ids
+  private_subnet_ids             = module.vpc.private_subnet_ids
+
+  depends_on = [module.iam]
+}
+
 module "ecr" {
   source       = "../../modules/ecr"
   project_name = var.project_name
   environment  = var.environment
 }
 
+module "rds" {
+  source             = "../../modules/rds"
+  project_name       = var.project_name
+  environment        = var.environment
+  vpc_id             = module.vpc.vpc_id
+  vpc_cidr           = module.vpc.vpc_cidr
+  private_subnet_ids = module.vpc.private_subnet_ids
+  db_password        = var.db_password
+}
+
 # ============================================================================
 # REFERENCE ONLY — Route 53 + ACM
 # Uncomment to activate. Requires a registered domain.
-# Cost: ~$0.50/month for hosted zone. ACM cert is free.
 # ============================================================================
 # module "route53" {
 #   source       = "../../modules/route53"
@@ -96,5 +112,5 @@ module "ecr" {
 #   environment  = var.environment
 #   domain_name  = "telescope.yourdomain.com"
 #   alb_dns_name = "<value from: kubectl get ingress -n telescope>"
-#   alb_zone_id  = "<ALB hosted zone ID for ap-south-1: ZP97RAFLXTNZK>"
+#   alb_zone_id  = "ZP97RAFLXTNZK"  # ap-south-1 ALB zone ID
 # }

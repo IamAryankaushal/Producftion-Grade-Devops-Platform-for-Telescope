@@ -1,0 +1,45 @@
+---
+# Variables shared across all roles and playbooks
+
+# AWS
+aws_region: "ap-south-1"
+
+# Cluster
+cluster_name: "telescope-dev-eks"
+
+# Namespaces
+telescope_namespace: "telescope"
+monitoring_namespace: "monitoring"
+
+# Directories (resolved relative to the repo root)
+devops_dir: "{{ playbook_dir }}/../.."
+telescope_dir: "{{ playbook_dir }}/../../telescope"
+k8s_dir: "{{ playbook_dir }}/../../k8s"
+tf_dir: "{{ playbook_dir }}/../../terraform/environments/dev"
+
+# Services to build and push
+service_list:
+  - posts
+  - search
+  - image
+  - status
+  - feed-discovery
+  - sso
+  - parser
+
+# Monitoring
+grafana_admin_password: "telescope123"
+grafana_service_type: "LoadBalancer"
+prometheus_service_type: "ClusterIP"
+scrape_interval: "15s"
+alertmanager_enabled: "false"
+
+# Docker
+build_images: true
+push_images: true
+image_tag: "latest"
+
+# Tool installation flags (set false if already installed)
+install_aws_cli: true
+install_kubectl: true
+install_helm: true

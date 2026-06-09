@@ -1,0 +1,128 @@
+---
+# Docker role — installs Docker Engine and handles image build + ECR push
+
+- name: Install Docker prerequisites
+  apt:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
+      - lsb-release
+    state: present
+  become: true
+  when: ansible_os_family == "Debian"
+
+- name: Add Docker GPG key
+  shell: |
+    install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+      | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    chmod a+r /etc/apt/keyrings/docker.gpg
+  become: true
+  args:
+    creates: /etc/apt/keyrings/docker.gpg
+
+- name: Add Docker apt repository
+  shell: |
+    echo \
+      "deb [arch=$(dpkg --print-architecture) \
+      signed-by=/etc/apt/keyrings/docker.gpg] \
+      https://download.docker.com/linux/ubuntu \
+      $(lsb_release -cs) stable" \
+      | tee /etc/apt/sources.list.d/docker.list > /dev/null
+  become: true
+  args:
+    creates: /etc/apt/sources.list.d/docker.list
+
+- name: Install Docker Engine
+  apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    update_cache: true
+    state: present
+  become: true
+
+- name: Add current user to docker group
+  user:
+    name: "{{ ansible_user }}"
+    groups: docker
+    append: true
+  become: true
+
+- name: Start and enable Docker service
+  service:
+    name: docker
+    state: started
+    enabled: true
+  become: true
+
+- name: Verify Docker is running
+  command: docker info
+  changed_when: false
+  register: docker_info
+
+- name: Login to Amazon ECR
+  shell: |
+    aws ecr get-login-password --region {{ aws_region }} \
+      | docker login \
+        --username AWS \
+        --password-stdin {{ ecr_registry_url }}
+  changed_when: true
+  when:
+    - aws_region is defined
+    - ecr_registry_url is defined
+
+- name: Build service images
+  shell: |
+    TELESCOPE_DIR="{{ telescope_dir }}"
+    REGISTRY="{{ ecr_registry_url }}"
+    DEVOPS_DIR="{{ devops_dir }}"
+    SERVICES="{{ service_list | join(' ') }}"
+
+    for svc in $SERVICES; do
+      SVC_DIR="$TELESCOPE_DIR/src/api/$svc"
+      [ -f "$SVC_DIR/Dockerfile" ] || continue
+
+      if [ "$svc" = "image" ]; then
+        DOCKERFILE="$DEVOPS_DIR/docker/image.Dockerfile"
+      else
+        DOCKERFILE="$SVC_DIR/Dockerfile"
+      fi
+
+      echo "Building $svc..."
+      docker build \
+        -t "$REGISTRY/telescope/$svc:{{ image_tag | default('latest') }}" \
+        -t "$REGISTRY/telescope/$svc:latest" \
+        -f "$DOCKERFILE" \
+        "$SVC_DIR/"
+      echo "[✓] $svc built"
+    done
+  args:
+    executable: /bin/bash
+  changed_when: true
+  when:
+    - build_images | default(false)
+    - telescope_dir is defined
+    - ecr_registry_url is defined
+
+- name: Push service images to ECR
+  shell: |
+    REGISTRY="{{ ecr_registry_url }}"
+    SERVICES="{{ service_list | join(' ') }}"
+    TAG="{{ image_tag | default('latest') }}"
+
+    for svc in $SERVICES; do
+      docker push "$REGISTRY/telescope/$svc:$TAG"
+      docker push "$REGISTRY/telescope/$svc:latest"
+      echo "[✓] $svc pushed"
+    done
+  args:
+    executable: /bin/bash
+  changed_when: true
+  when:
+    - push_images | default(false)
+    - ecr_registry_url is defined

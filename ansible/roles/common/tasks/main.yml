@@ -1,0 +1,113 @@
+---
+# Common role — installs baseline tooling needed on any host
+# Used as a dependency by other roles
+
+- name: Update apt cache
+  apt:
+    update_cache: true
+    cache_valid_time: 3600
+  become: true
+  when: ansible_os_family == "Debian"
+
+- name: Install baseline system packages
+  apt:
+    name:
+      - curl
+      - wget
+      - git
+      - unzip
+      - jq
+      - make
+      - ca-certificates
+      - gnupg
+      - lsb-release
+      - apt-transport-https
+      - python3-pip
+    state: present
+  become: true
+  when: ansible_os_family == "Debian"
+
+- name: Install AWS CLI v2
+  block:
+    - name: Download AWS CLI installer
+      get_url:
+        url: https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
+        dest: /tmp/awscliv2.zip
+
+    - name: Unzip AWS CLI
+      unarchive:
+        src: /tmp/awscliv2.zip
+        dest: /tmp/
+        remote_src: true
+
+    - name: Install AWS CLI
+      command: /tmp/aws/install --update
+      become: true
+      changed_when: true
+
+    - name: Cleanup installer
+      file:
+        path: "{{ item }}"
+        state: absent
+      with_items:
+        - /tmp/awscliv2.zip
+        - /tmp/aws
+  when: install_aws_cli | default(true)
+
+- name: Install kubectl
+  block:
+    - name: Get latest kubectl version
+      uri:
+        url: https://dl.k8s.io/release/stable.txt
+        return_content: true
+      register: kubectl_version
+
+    - name: Download kubectl
+      get_url:
+        url: "https://dl.k8s.io/release/{{ kubectl_version.content | trim }}/bin/linux/amd64/kubectl"
+        dest: /tmp/kubectl
+        mode: "0755"
+
+    - name: Install kubectl
+      copy:
+        src: /tmp/kubectl
+        dest: /usr/local/bin/kubectl
+        mode: "0755"
+        remote_src: true
+      become: true
+  when: install_kubectl | default(true)
+
+- name: Install Helm
+  block:
+    - name: Download Helm installer
+      get_url:
+        url: https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+        dest: /tmp/get-helm.sh
+        mode: "0755"
+
+    - name: Run Helm installer
+      command: /tmp/get-helm.sh
+      become: true
+      changed_when: true
+
+    - name: Cleanup Helm installer
+      file:
+        path: /tmp/get-helm.sh
+        state: absent
+  when: install_helm | default(true)
+
+- name: Verify tool versions
+  command: "{{ item }}"
+  changed_when: false
+  with_items:
+    - aws --version
+    - kubectl version --client
+    - helm version
+  register: tool_versions
+  ignore_errors: true
+
+- name: Print tool versions
+  debug:
+    msg: "{{ item.stdout }}"
+  with_items: "{{ tool_versions.results }}"
+  when: item.stdout is defined

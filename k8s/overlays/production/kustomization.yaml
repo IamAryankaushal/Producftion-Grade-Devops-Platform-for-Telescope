@@ -1,0 +1,52 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+patches:
+  - patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 2
+    target:
+      kind: Deployment
+      name: telescope-posts
+  - patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 2
+    target:
+      kind: Deployment
+      name: telescope-search
+  - patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Always
+    target:
+      kind: Deployment
+      labelSelector: "tier=microservice"
+  - path: alb-ingress-patch.yaml
+
+images:
+  - name: telescope/posts
+    newName: 808683200925.dkr.ecr.ap-south-1.amazonaws.com/telescope/posts
+    newTag: latest
+  - name: telescope/search
+    newName: 808683200925.dkr.ecr.ap-south-1.amazonaws.com/telescope/search
+    newTag: latest
+  - name: telescope/image
+    newName: 808683200925.dkr.ecr.ap-south-1.amazonaws.com/telescope/image
+    newTag: latest
+  - name: telescope/status
+    newName: 808683200925.dkr.ecr.ap-south-1.amazonaws.com/telescope/status
+    newTag: latest
+  - name: telescope/feed-discovery
+    newName: 808683200925.dkr.ecr.ap-south-1.amazonaws.com/telescope/feed-discovery
+    newTag: latest
+  - name: telescope/sso
+    newName: 808683200925.dkr.ecr.ap-south-1.amazonaws.com/telescope/sso
+    newTag: latest
+  - name: telescope/parser
+    newName: 808683200925.dkr.ecr.ap-south-1.amazonaws.com/telescope/parser
+    newTag: latest

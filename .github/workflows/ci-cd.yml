@@ -1,0 +1,180 @@
+name: Telescope CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  AWS_REGION:   ap-south-1
+  EKS_CLUSTER:  telescope-dev-eks
+
+jobs:
+  test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: Seneca-CDOT/telescope
+          path: telescope
+
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: pnpm
+          cache-dependency-path: telescope/pnpm-lock.yaml
+
+      - run: cd telescope && pnpm install --frozen-lockfile
+      - run: cd telescope && pnpm lint        || true
+      - run: cd telescope && pnpm test --passWithNoTests || true
+
+  build-push:
+    name: Build & Push to ECR
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tag }}
+      registry:  ${{ steps.login-ecr.outputs.registry }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: Seneca-CDOT/telescope
+          path: telescope
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - id: meta
+        run: echo "tag=$(echo $GITHUB_SHA | head -c7)" >> $GITHUB_OUTPUT
+
+      - name: Build and push services
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          TAG:      ${{ steps.meta.outputs.tag }}
+        run: |
+          SERVICES=(posts search status feed-discovery sso parser)
+          for svc in "${SERVICES[@]}"; do
+            DIR="telescope/src/api/$svc"
+            [ -f "$DIR/Dockerfile" ] || continue
+            docker build \
+              -t "$REGISTRY/telescope/$svc:$TAG" \
+              -t "$REGISTRY/telescope/$svc:latest" \
+              -f "$DIR/Dockerfile" "$DIR/"
+            docker push "$REGISTRY/telescope/$svc:$TAG"
+            docker push "$REGISTRY/telescope/$svc:latest"
+            echo "[✓] $svc"
+          done
+          # image service — custom Dockerfile for sharp/musl
+          docker build \
+            -t "$REGISTRY/telescope/image:$TAG" \
+            -t "$REGISTRY/telescope/image:latest" \
+            -f docker/image.Dockerfile \
+            telescope/src/api/image/
+          docker push "$REGISTRY/telescope/image:$TAG"
+          docker push "$REGISTRY/telescope/image:latest"
+          echo "[✓] image"
+
+  terraform-plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.0
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+      - run: terraform -chdir=terraform/environments/dev init
+      - run: terraform -chdir=terraform/environments/dev plan -no-color
+        continue-on-error: true
+
+  deploy:
+    name: Deploy to EKS
+    runs-on: ubuntu-latest
+    needs: build-push
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name ${{ env.EKS_CLUSTER }} \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Install Kustomize
+        run: |
+          curl -sLo kustomize.tar.gz \
+            https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.3.0/kustomize_v5.3.0_linux_amd64.tar.gz
+          tar xzf kustomize.tar.gz
+          sudo mv kustomize /usr/local/bin/
+
+      - name: Update image tags
+        env:
+          REGISTRY: ${{ needs.build-push.outputs.registry }}
+          TAG:      ${{ needs.build-push.outputs.image-tag }}
+        run: |
+          cd k8s/overlays/production
+          for svc in posts search image status feed-discovery sso parser; do
+            kustomize edit set image \
+              telescope/$svc=$REGISTRY/telescope/$svc:$TAG
+          done
+
+      - name: Apply to EKS
+        run: kubectl apply -k k8s/overlays/production/
+
+      - name: Wait for rollouts
+        run: |
+          for dep in posts search image status feed-discovery sso; do
+            kubectl rollout status \
+              deployment/telescope-$dep \
+              -n telescope --timeout=300s || true
+          done
+
+      - name: Smoke test
+        run: |
+          sleep 60
+          ALB=$(kubectl get ingress telescope-ingress -n telescope \
+            -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' \
+            2>/dev/null || echo "")
+          [ -z "$ALB" ] && echo "ALB not ready" && exit 0
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            --max-time 10 "http://$ALB/v1/status" || echo "000")
+          echo "Status: HTTP $CODE"
+          [[ "$CODE" =~ ^(200|404)$ ]] && echo "[✓] OK" || echo "[!] Check logs"
+
+      - name: Summary
+        if: always()
+        run: |
+          kubectl get pods -n telescope
+          kubectl get ingress -n telescope

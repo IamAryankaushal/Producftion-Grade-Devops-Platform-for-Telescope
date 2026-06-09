@@ -1,0 +1,111 @@
+---
+# Monitoring role — installs Prometheus and Grafana into the cluster via Helm
+# and configures Grafana datasources and dashboards
+
+- name: Add Helm repositories
+  shell: |
+    helm repo add prometheus-community \
+      https://prometheus-community.github.io/helm-charts
+    helm repo add grafana \
+      https://grafana.github.io/helm-charts
+    helm repo update
+  changed_when: true
+
+- name: Create monitoring namespace
+  shell: |
+    kubectl create namespace {{ monitoring_namespace | default('monitoring') }} \
+      --dry-run=client -o yaml | kubectl apply -f -
+  changed_when: true
+
+- name: Install Prometheus
+  shell: |
+    helm upgrade --install prometheus \
+      prometheus-community/prometheus \
+      --namespace {{ monitoring_namespace | default('monitoring') }} \
+      --set server.persistentVolume.enabled=false \
+      --set server.service.type={{ prometheus_service_type | default('ClusterIP') }} \
+      --set alertmanager.enabled={{ alertmanager_enabled | default('false') }} \
+      --set pushgateway.enabled=false \
+      --set server.global.scrape_interval={{ scrape_interval | default('15s') }} \
+      --wait --timeout=5m
+  changed_when: true
+
+- name: Install Grafana
+  shell: |
+    helm upgrade --install grafana \
+      grafana/grafana \
+      --namespace {{ monitoring_namespace | default('monitoring') }} \
+      --set adminPassword={{ grafana_admin_password | default('telescope123') }} \
+      --set persistence.enabled=false \
+      --set service.type={{ grafana_service_type | default('LoadBalancer') }} \
+      --set grafana.ini.server.root_url=http://localhost:3000 \
+      --wait --timeout=5m
+  changed_when: true
+
+- name: Wait for Prometheus to be ready
+  shell: |
+    kubectl rollout status deployment/prometheus-server \
+      -n {{ monitoring_namespace | default('monitoring') }} \
+      --timeout=120s
+  changed_when: false
+
+- name: Wait for Grafana to be ready
+  shell: |
+    kubectl rollout status deployment/grafana \
+      -n {{ monitoring_namespace | default('monitoring') }} \
+      --timeout=120s
+  changed_when: false
+
+- name: Get Prometheus cluster IP
+  shell: |
+    kubectl get svc prometheus-server \
+      -n {{ monitoring_namespace | default('monitoring') }} \
+      -o jsonpath='{.spec.clusterIP}'
+  register: prometheus_cluster_ip
+  changed_when: false
+
+- name: Configure Grafana Prometheus datasource via API
+  shell: |
+    # Wait for Grafana pod to be fully up
+    sleep 10
+    GRAFANA_POD=$(kubectl get pod \
+      -n {{ monitoring_namespace | default('monitoring') }} \
+      -l app.kubernetes.io/name=grafana \
+      -o jsonpath='{.items[0].metadata.name}')
+
+    kubectl exec -n {{ monitoring_namespace | default('monitoring') }} \
+      $GRAFANA_POD -- \
+      curl -s -X POST \
+      -H "Content-Type: application/json" \
+      -d '{
+        "name": "Prometheus",
+        "type": "prometheus",
+        "url": "http://prometheus-server.{{ monitoring_namespace | default("monitoring") }}.svc.cluster.local",
+        "access": "proxy",
+        "isDefault": true
+      }' \
+      http://admin:{{ grafana_admin_password | default('telescope123') }}@localhost:3000/api/datasources \
+      || true
+  changed_when: true
+
+- name: Get Grafana LoadBalancer URL
+  shell: |
+    for i in $(seq 1 15); do
+      HOST=$(kubectl get svc grafana \
+        -n {{ monitoring_namespace | default('monitoring') }} \
+        -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' \
+        2>/dev/null || echo "")
+      [ -n "$HOST" ] && echo "$HOST" && exit 0
+      echo "Waiting for Grafana LB... ($i/15)" >&2
+      sleep 10
+    done
+    echo "not-ready"
+  register: grafana_lb_url
+  changed_when: false
+
+- name: Print monitoring access info
+  debug:
+    msg:
+      - "Prometheus: http://{{ prometheus_cluster_ip.stdout }}:9090 (cluster internal)"
+      - "Grafana:    http://{{ grafana_lb_url.stdout }}"
+      - "Grafana credentials: admin / {{ grafana_admin_password | default('telescope123') }}"
