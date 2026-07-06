@@ -903,8 +903,3 @@ After `terraform apply` runs, AWS sends a subscription confirmation email to `al
 - **Billing alarm** — CloudWatch fires at $5/day spend
 
 ---
-
-## License
-
-Infrastructure code in this repository is MIT licensed.
-The Telescope application source code is licensed under [BSD-2-Clause](https://github.com/Seneca-CDOT/telescope/blob/master/LICENSE).
